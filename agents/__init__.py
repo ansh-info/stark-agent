@@ -1,11 +1,5 @@
-from tools.stark.evaluate_retrieval import evaluate_stark_retrieval
+# Expose main agent and StarkQA agent at package level
+from agents.main_agent import main_agent
+from agents.stark_agent import stark_agent
 
-# Export all tools in a list for easy access
-stark_tools = [
-    evaluate_stark_retrieval,
-]
-
-__all__ = [
-    "evaluate_stark_retrieval",
-    "stark_tools",
-]
+__all__ = ["main_agent", "stark_agent"]
