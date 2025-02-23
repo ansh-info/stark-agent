@@ -1,3 +1,63 @@
+class Config:
+    # LLM Configuration
+    LLM_MODEL = "gpt-4o-mini"
+    TEMPERATURE = 0.7
+
+    # State Keys
+    class StateKeys:
+        # STaRK-specific keys
+        EMBEDDINGS = "embeddings"  # Store embeddings data
+        QUERY_EMBEDDINGS = "query_embeddings"  # Query embeddings
+        NODE_EMBEDDINGS = "node_embeddings"  # Node embeddings
+        EVALUATION_RESULTS = "evaluation_results"  # Benchmark results
+        METRICS = "metrics"  # Evaluation metrics
+        KNOWLEDGE_GRAPH = "knowledge_graph"  # Graph structure
+        BATCH_CONFIG = "batch_config"  # Batch processing settings
+        EVALUATION_CONFIG = "evaluation_config"  # Evaluation parameters
+
+    # Agent Names
+    class AgentNames:
+        MAIN = "main_agent"
+        STARK = "stark_evaluation_agent"  # New STaRK agent
+        STARK_VIZ = "stark_visualization_agent"  # Visualization agent
+        STARK_DATA = "stark_data_processing_agent"  # Data processing agent
+
+    # Tool Names
+    class ToolNames:
+        # STaRK Tools
+        STARK_EVALUATE = "evaluate_stark_retrieval"
+        STARK_ANALYZE_GRAPH = "analyze_knowledge_graph"
+        STARK_COMPUTE_METRICS = "compute_vector_metrics"
+        STARK_VISUALIZE = "visualize_results"
+        STARK_PROCESS_DATA = "process_embeddings"
+
+    # STaRK-specific configurations
+    STARK_CONFIG = {
+        "batch_size": 256,
+        "top_k": 100,
+        "metrics": [
+            "mrr",
+            "map",
+            "rprecision",
+            "recall@5",
+            "recall@10",
+            "recall@20",
+            "recall@50",
+            "recall@100",
+            "hit@1",
+            "hit@3",
+            "hit@5",
+            "hit@10",
+            "hit@20",
+            "hit@50",
+        ],
+        "splits": ["test-0.1", "test", "validation"],
+    }
+
+
+config = Config()
+
+
 MAIN_AGENT_PROMPT = """You are a supervisory AI agent for evaluating and benchmarking LLM retrieval systems using the STaRK benchmark.
 Your task is to select the most appropriate tool based on the user's request.
 
