@@ -1,14 +1,20 @@
 import os
+import sys
 import unittest
+from typing import Any, Dict, List
+
+# Add project root to Python path
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(project_root)
+
 import pandas as pd
 import torch
-from langchain_core.messages import HumanMessage
-
-from agents.stark_agent import stark_agent
 from agents.main_agent import main_agent
+from agents.stark_agent import stark_agent
 from config.config import config
+from langchain_core.messages import HumanMessage
 from state.shared_state import shared_state
-from tools.stark.evaluate_retrieval import evaluate_stark_retrieval
+from tools.stark.evaluation_retrival import evaluate_stark_retrieval
 
 
 class TestStarkEvaluation(unittest.TestCase):
@@ -54,11 +60,13 @@ class TestStarkEvaluation(unittest.TestCase):
 
     def test_evaluation_tool(self):
         """Test the StarkQA evaluation tool"""
-        result = evaluate_stark_retrieval(
-            query_file=os.path.join(self.test_dir, "test_queries.parquet"),
-            node_file=os.path.join(self.test_dir, "test_nodes.parquet"),
-            batch_size=2,
-            split="test",
+        result = evaluate_stark_retrieval.invoke(
+            {
+                "query_file": os.path.join(self.test_dir, "test_queries.parquet"),
+                "node_file": os.path.join(self.test_dir, "test_nodes.parquet"),
+                "batch_size": 2,
+                "split": "test",
+            }
         )
 
         self.assertEqual(result["status"], "success")
@@ -87,10 +95,13 @@ class TestStarkEvaluation(unittest.TestCase):
     def test_shared_state_updates(self):
         """Test shared state updates during evaluation"""
         # Run evaluation
-        evaluate_stark_retrieval(
-            query_file=os.path.join(self.test_dir, "test_queries.parquet"),
-            node_file=os.path.join(self.test_dir, "test_nodes.parquet"),
-            batch_size=2,
+        evaluate_stark_retrieval.invoke(
+            {
+                "query_file": os.path.join(self.test_dir, "test_queries.parquet"),
+                "node_file": os.path.join(self.test_dir, "test_nodes.parquet"),
+                "batch_size": 2,
+                "split": "test",
+            }
         )
 
         # Check state updates
