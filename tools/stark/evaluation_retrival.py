@@ -1,4 +1,5 @@
 import time
+import ast
 from typing import Any, Dict, List, Optional, Union
 
 import torch
@@ -35,31 +36,14 @@ class StarkEvalInput(BaseModel):
 def evaluate_stark_retrieval(
     query_file: str, node_file: str, batch_size: int = 256, split: str = "test-0.1"
 ) -> Dict[str, Any]:
-    """Evaluate retrieval performance using StarkQA benchmark.
-
-    Best for:
-    - Evaluating LLM retrieval performance
-    - Benchmarking on semi-structured knowledge bases
-    - Computing standard retrieval metrics
-
-    Examples:
-    - Computing MRR, MAP, Recall@K metrics
-    - Evaluating vector similarity search
-    - Analyzing knowledge graph retrieval
-
-    Args:
-        query_file: Path to query embeddings parquet file
-        node_file: Path to node embeddings parquet file
-        batch_size: Batch size for processing
-        split: Data split to evaluate on
-
-    Returns:
-        Dict containing evaluation metrics and results
-    """
+    """Evaluate retrieval performance using StarkQA benchmark."""
     try:
         # Load data
         queries_df = pd.read_parquet(query_file)
         nodes_df = pd.read_parquet(node_file)
+
+        # Convert answer_ids from string to list
+        queries_df["answer_ids"] = queries_df.answer_ids.apply(ast.literal_eval)
 
         # Set device
         device = "cuda:0" if torch.cuda.is_available() else "cpu"
@@ -99,21 +83,32 @@ def evaluate_stark_retrieval(
                         batch_start : batch_start + batch_size
                     ]
 
-                    # Calculate similarities
+                    # Convert query embeddings to numpy array first
+                    query_embeddings_list = [
+                        np.array(emb) for emb in batch_queries.query_embedded.values
+                    ]
+                    node_embeddings_list = [np.array(emb) for emb in nodes_df.x.values]
+
+                    # Calculate similarities with explicit dtype
                     query_embeddings = torch.tensor(
-                        np.stack(batch_queries.query_embedded.values)
+                        np.stack(query_embeddings_list), dtype=torch.float32
                     ).to(device)
-                    node_embeddings = torch.tensor(np.stack(nodes_df.x.values)).to(
-                        device
-                    )
+
+                    node_embeddings = torch.tensor(
+                        np.stack(node_embeddings_list), dtype=torch.float32
+                    ).to(device)
 
                     similarity = torch.matmul(query_embeddings, node_embeddings.T).cpu()
+
+                    # Convert to float32
+                    similarity = similarity.to(torch.float32)
 
                     # Prepare predictions
                     pred_ids = candidate_ids
                     pred = similarity.t()
                     answer_ids = [
-                        torch.LongTensor(aids) for aids in batch_queries.answer_ids
+                        torch.LongTensor([int(x) for x in aids])
+                        for aids in batch_queries.answer_ids
                     ]
 
                     # Evaluate batch
@@ -134,7 +129,9 @@ def evaluate_stark_retrieval(
                 # Calculate mean metrics
                 mean_metrics = {}
                 for metric in metrics:
-                    mean_metrics[metric] = np.mean([r[metric] for r in eval_results])
+                    mean_metrics[metric] = float(
+                        np.mean([r[metric] for r in eval_results])
+                    )
 
                 # Update shared state
                 shared_state.set(config.StateKeys.EVALUATION_RESULTS, eval_results)
@@ -171,10 +168,14 @@ def evaluate_batch(
 ) -> List[Dict[str, float]]:
     """Evaluate a batch of predictions."""
 
-    # Prepare prediction tensor
+    # Prepare prediction tensor with explicit dtype
     all_pred = torch.ones(
-        (max(candidate_ids) + 1, pred.shape[1]), dtype=torch.float
+        (max(candidate_ids) + 1, pred.shape[1]), dtype=torch.float32
     ) * (pred.min() - 1)
+
+    # Convert pred to float32 if needed
+    pred = pred.to(torch.float32)
+
     all_pred[pred_ids, :] = pred
     all_pred = all_pred[candidate_ids].t().to(device)
 
