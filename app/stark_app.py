@@ -115,12 +115,29 @@ def render_knowledge_graph(nodes_df, similarity_matrix=None):
 def main():
     st.title("STaRK: Benchmarking LLM Retrieval")
 
+    # Create status container
+    status_container = st.container()
+    progress_bar = status_container.progress(0)
+    status_text = status_container.empty()
+    metrics_container = st.container()
+
     # Sidebar configuration
-    st.sidebar.header("Configuration")
-    batch_size = st.sidebar.slider("Batch Size", 32, 512, 256, 32)
-    split = st.sidebar.selectbox(
-        "Evaluation Split", options=["test-0.1", "test", "validation"]
-    )
+    with st.sidebar:
+        st.header("Configuration")
+        batch_size = st.slider("Batch Size", 32, 512, 256, 32)
+        split = st.selectbox(
+            "Evaluation Split", options=["test-0.1", "test", "validation"]
+        )
+
+        # Add memory info
+        st.info(
+            """
+        File Size Limits:
+        - Query Embeddings: ~12MB
+        - Node Embeddings: ~200MB
+        Processing larger files may take several minutes.
+        """
+        )
 
     # File upload section
     st.header("Data Upload")
@@ -128,68 +145,125 @@ def main():
 
     with col1:
         query_file = st.file_uploader(
-            "Upload Query Embeddings (Parquet)", type=["parquet"]
+            "Upload Query Embeddings (Parquet)",
+            type=["parquet"],
+            help="Upload query embeddings file (expects around 12MB)",
         )
+        if query_file:
+            size_mb = query_file.size / (1024 * 1024)
+            st.success(f"Query file loaded: {size_mb:.2f}MB")
 
     with col2:
         node_file = st.file_uploader(
-            "Upload Node Embeddings (Parquet)", type=["parquet"]
+            "Upload Node Embeddings (Parquet)",
+            type=["parquet"],
+            help="Upload node embeddings file (expects around 200MB)",
         )
+        if node_file:
+            size_mb = node_file.size / (1024 * 1024)
+            st.success(f"Node file loaded: {size_mb:.2f}MB")
 
     # Evaluation section
     if query_file and node_file:
         st.header("Evaluation")
 
         if st.button("Run Evaluation"):
-            with st.spinner("Running evaluation..."):
-                # Save uploaded files temporarily
+            try:
+                # Save uploaded files
+                status_text.text("Step 1/5: Saving uploaded files...")
+                progress_bar.progress(10)
+
                 with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f1:
                     f1.write(query_file.getvalue())
                     query_path = f1.name
+
+                progress_bar.progress(20)
+                status_text.text("Step 2/5: Processing query embeddings...")
 
                 with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f2:
                     f2.write(node_file.getvalue())
                     node_path = f2.name
 
-                try:
-                    # Run evaluation
-                    result = evaluate_stark_retrieval.invoke(
-                        {
-                            "query_file": query_path,
-                            "node_file": node_path,
-                            "batch_size": batch_size,
-                            "split": split,
-                        }
-                    )
+                progress_bar.progress(30)
+                status_text.text("Step 3/5: Processing node embeddings...")
 
-                    if result["status"] == "success":
-                        st.success("Evaluation completed successfully!")
+                # Run evaluation with progress updates
+                status_text.text(
+                    "Step 4/5: Running evaluation (this may take several minutes)..."
+                )
+                progress_bar.progress(40)
+
+                result = evaluate_stark_retrieval.invoke(
+                    {
+                        "query_file": query_path,
+                        "node_file": node_path,
+                        "batch_size": batch_size,
+                        "split": split,
+                    }
+                )
+
+                if result["status"] == "success":
+                    progress_bar.progress(90)
+                    status_text.text("Step 5/5: Generating visualizations...")
+
+                    with metrics_container:
+                        st.success("✅ Evaluation completed successfully!")
 
                         # Display metrics
                         st.subheader("Evaluation Metrics")
+
+                        # Display summary metrics first
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("MRR", f"{result['metrics']['mrr']:.3f}")
+                        with col2:
+                            st.metric("MAP", f"{result['metrics']['map']:.3f}")
+                        with col3:
+                            st.metric(
+                                "R-Precision", f"{result['metrics']['rprecision']:.3f}"
+                            )
+
+                        # Display detailed metrics visualization
                         render_metrics_visualization(result["metrics"])
 
-                        # Load node data for visualization
+                        # Load and display knowledge graph
+                        st.subheader("Knowledge Graph Visualization")
                         nodes_df = pd.read_parquet(node_path)
-
-                        # Display knowledge graph
-                        st.subheader("Knowledge Graph")
                         render_knowledge_graph(nodes_df)
 
-                    else:
-                        st.error(
-                            f"Evaluation failed: {result.get('message', 'Unknown error')}"
-                        )
+                    progress_bar.progress(100)
+                    status_text.text("✅ Processing complete!")
 
-                except Exception as e:
-                    st.error(f"Error during evaluation: {str(e)}")
+                else:
+                    st.error(
+                        f"Evaluation failed: {result.get('message', 'Unknown error')}"
+                    )
 
-                finally:
-                    # Cleanup temporary files
-                    import os
+            except Exception as e:
+                st.error(f"Error during evaluation: {str(e)}")
 
+            finally:
+                # Cleanup temporary files
+                try:
                     os.unlink(query_path)
                     os.unlink(node_path)
+                except:
+                    pass
+
+    # Add processing tips
+    st.sidebar.markdown(
+        """
+    ### Processing Time:
+    - Small files (~10MB): 1-2 minutes
+    - Medium files (~100MB): 3-5 minutes
+    - Large files (>200MB): 5+ minutes
+    
+    ### Tips:
+    - Use smaller batch sizes for large files
+    - Keep the browser tab active
+    - Check terminal for detailed logs
+    """
+    )
 
     # Chat interface
     st.header("Chat Interface")
@@ -206,14 +280,21 @@ def main():
             st.markdown(prompt)
 
         with st.chat_message("assistant"):
-            response = main_agent.invoke(
-                {"messages": [{"role": "user", "content": prompt}]}
-            )
-            content = response.get(
-                "response", "Sorry, I couldn't process that request."
-            )
-            st.markdown(content)
-            st.session_state.messages.append({"role": "assistant", "content": content})
+            try:
+                response = main_agent.invoke(
+                    {"messages": [{"role": "user", "content": prompt}]}
+                )
+                content = response.get(
+                    "response", "How can I help you with the evaluation?"
+                )
+                st.markdown(content)
+                st.session_state.messages.append(
+                    {"role": "assistant", "content": content}
+                )
+            except Exception as e:
+                st.error(
+                    "Sorry, I couldn't process that request. Please try asking about the evaluation process or results."
+                )
 
 
 if __name__ == "__main__":
