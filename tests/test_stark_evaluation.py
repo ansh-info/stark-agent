@@ -9,6 +9,7 @@ sys.path.append(project_root)
 
 import pandas as pd
 import torch
+import numpy as np
 from agents.main_agent import main_agent
 from agents.stark_agent import stark_agent
 from config.config import config
@@ -42,7 +43,7 @@ class TestStarkEvaluation(unittest.TestCase):
         queries_data = {
             "id": [0, 1],
             "query": ["test query 1", "test query 2"],
-            "answer_ids": [[1], [2]],
+            "answer_ids": [[1], [2]],  # Simple list instead of numpy array
             "query_embedded": [torch.randn(768).numpy().tolist() for _ in range(2)],
         }
         queries_df = pd.DataFrame(queries_data)
@@ -94,8 +95,7 @@ class TestStarkEvaluation(unittest.TestCase):
 
     def test_shared_state_updates(self):
         """Test shared state updates during evaluation"""
-        # Run evaluation
-        evaluate_stark_retrieval.invoke(
+        result = evaluate_stark_retrieval.invoke(
             {
                 "query_file": os.path.join(self.test_dir, "test_queries.parquet"),
                 "node_file": os.path.join(self.test_dir, "test_nodes.parquet"),
