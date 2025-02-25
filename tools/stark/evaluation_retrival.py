@@ -32,6 +32,24 @@ class StarkEvalInput(BaseModel):
     split: str = Field(default="test-0.1", description="Data split to evaluate on")
 
 
+def parse_answer_ids(answer_ids):
+    """Helper function to parse answer_ids in different formats"""
+    try:
+        # If it's already a list, return it
+        if isinstance(answer_ids, list):
+            return answer_ids
+        # If it's a string representation of a list, eval it
+        elif isinstance(answer_ids, str):
+            return ast.literal_eval(answer_ids)
+        # If it's a numpy array, convert to list
+        elif isinstance(answer_ids, np.ndarray):
+            return answer_ids.tolist()
+        else:
+            raise ValueError(f"Unexpected answer_ids type: {type(answer_ids)}")
+    except Exception as e:
+        raise ValueError(f"Error parsing answer_ids: {str(e)}")
+
+
 @tool(args_schema=StarkEvalInput)
 def evaluate_stark_retrieval(
     query_file: str, node_file: str, batch_size: int = 256, split: str = "test-0.1"
@@ -42,14 +60,23 @@ def evaluate_stark_retrieval(
         queries_df = pd.read_parquet(query_file)
         nodes_df = pd.read_parquet(node_file)
 
-        # Convert answer_ids from string to list
-        queries_df["answer_ids"] = queries_df.answer_ids.apply(ast.literal_eval)
+        # Parse answer_ids safely
+        queries_df["answer_ids"] = queries_df.answer_ids.apply(parse_answer_ids)
 
         # Set device
         device = "cuda:0" if torch.cuda.is_available() else "cpu"
 
         # Prepare node IDs
         candidate_ids = torch.LongTensor(nodes_df.node_id.tolist())
+
+        # Process embeddings
+        try:
+            query_embeddings_list = [
+                np.array(emb) for emb in queries_df.query_embedded.values
+            ]
+            node_embeddings_list = [np.array(emb) for emb in nodes_df.x.values]
+        except Exception as e:
+            raise ValueError(f"Error processing embeddings: {str(e)}")
 
         # Define metrics
         metrics = [
@@ -72,87 +99,62 @@ def evaluate_stark_retrieval(
         # Initialize results
         eval_results = []
 
-        max_retries = 3
-        retry_delay = 2
+        # Calculate similarities with explicit dtype
+        query_embeddings = torch.tensor(
+            np.stack(query_embeddings_list), dtype=torch.float32
+        ).to(device)
 
-        for attempt in range(max_retries):
-            try:
-                # Process in batches
-                for batch_start in range(0, len(queries_df), batch_size):
-                    batch_queries = queries_df.iloc[
-                        batch_start : batch_start + batch_size
-                    ]
+        node_embeddings = torch.tensor(
+            np.stack(node_embeddings_list), dtype=torch.float32
+        ).to(device)
 
-                    # Convert query embeddings to numpy array first
-                    query_embeddings_list = [
-                        np.array(emb) for emb in batch_queries.query_embedded.values
-                    ]
-                    node_embeddings_list = [np.array(emb) for emb in nodes_df.x.values]
+        similarity = torch.matmul(query_embeddings, node_embeddings.T).cpu()
 
-                    # Calculate similarities with explicit dtype
-                    query_embeddings = torch.tensor(
-                        np.stack(query_embeddings_list), dtype=torch.float32
-                    ).to(device)
+        # Convert to float32
+        similarity = similarity.to(torch.float32)
 
-                    node_embeddings = torch.tensor(
-                        np.stack(node_embeddings_list), dtype=torch.float32
-                    ).to(device)
+        # Prepare predictions
+        pred_ids = candidate_ids
+        pred = similarity.t()
 
-                    similarity = torch.matmul(query_embeddings, node_embeddings.T).cpu()
+        # Process in batches
+        for batch_start in range(0, len(queries_df), batch_size):
+            batch_queries = queries_df.iloc[batch_start : batch_start + batch_size]
 
-                    # Convert to float32
-                    similarity = similarity.to(torch.float32)
+            # Convert answer IDs to tensors
+            answer_ids = [torch.LongTensor(aids) for aids in batch_queries.answer_ids]
 
-                    # Prepare predictions
-                    pred_ids = candidate_ids
-                    pred = similarity.t()
-                    answer_ids = [
-                        torch.LongTensor([int(x) for x in aids])
-                        for aids in batch_queries.answer_ids
-                    ]
+            # Evaluate batch
+            batch_results = evaluate_batch(
+                candidate_ids=candidate_ids,
+                pred_ids=pred_ids,
+                pred=pred[:, batch_start : batch_start + len(batch_queries)],
+                answer_ids=answer_ids,
+                metrics=metrics,
+                device=device,
+            )
 
-                    # Evaluate batch
-                    batch_results = evaluate_batch(
-                        candidate_ids=candidate_ids,
-                        pred_ids=pred_ids,
-                        pred=pred,
-                        answer_ids=answer_ids,
-                        metrics=metrics,
-                        device=device,
-                    )
+            # Add query IDs and metadata
+            for i, result in enumerate(batch_results):
+                result["query_id"] = batch_queries.iloc[i].id
+                eval_results.append(result)
 
-                    # Add query IDs and metadata
-                    for i, result in enumerate(batch_results):
-                        result["query_id"] = batch_queries.iloc[i].id
-                        eval_results.append(result)
+        # Calculate mean metrics
+        mean_metrics = {}
+        for metric in metrics:
+            mean_metrics[metric] = float(np.mean([r[metric] for r in eval_results]))
 
-                # Calculate mean metrics
-                mean_metrics = {}
-                for metric in metrics:
-                    mean_metrics[metric] = float(
-                        np.mean([r[metric] for r in eval_results])
-                    )
+        # Update shared state
+        shared_state.set(config.StateKeys.EVALUATION_RESULTS, eval_results)
+        shared_state.set(config.StateKeys.METRICS, mean_metrics)
 
-                # Update shared state
-                shared_state.set(config.StateKeys.EVALUATION_RESULTS, eval_results)
-                shared_state.set(config.StateKeys.METRICS, mean_metrics)
-
-                return {
-                    "status": "success",
-                    "metrics": mean_metrics,
-                    "detailed_results": eval_results,
-                    "total_evaluated": len(eval_results),
-                    "message": f"Successfully evaluated {len(eval_results)} queries",
-                }
-
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-                    retry_delay *= 2
-                    continue
-                raise ToolException(f"Error during evaluation: {str(e)}")
-
-        raise ToolException(f"Failed after {max_retries} attempts")
+        return {
+            "status": "success",
+            "metrics": mean_metrics,
+            "detailed_results": eval_results,
+            "total_evaluated": len(eval_results),
+            "message": f"Successfully evaluated {len(eval_results)} queries",
+        }
 
     except Exception as e:
         raise ToolException(f"Error in evaluation process: {str(e)}")
