@@ -32,35 +32,33 @@ class StarkEvalInput(BaseModel):
     split: str = Field(default="test-0.1", description="Data split to evaluate on")
 
 
-def parse_answer_ids(answer_ids):
-    """Helper function to parse answer_ids in different formats"""
+def parse_answer_ids(answer_ids, max_node_id):
+    """Helper function to parse answer_ids in different formats and filter invalid IDs"""
     try:
-        # If it's already a list, return it
+        # Parse the answer_ids first
         if isinstance(answer_ids, list):
-            return answer_ids if len(answer_ids) > 0 else [0]  # Default value if empty
-
-        # If it's a string representation of a list, eval it
+            result = answer_ids
         elif isinstance(answer_ids, str):
             result = ast.literal_eval(answer_ids)
-            return result if len(result) > 0 else [0]
-
-        # If it's a numpy array, convert to list
         elif isinstance(answer_ids, np.ndarray):
             result = answer_ids.tolist()
-            return result if len(result) > 0 else [0]
-
-        # If it's a single integer, wrap it in a list
         elif isinstance(answer_ids, (int, np.int64, np.int32)):
-            return [int(answer_ids)]
-
+            result = [int(answer_ids)]
         else:
             print(
                 f"WARNING: Unexpected answer_ids type: {type(answer_ids)}, value: {answer_ids}"
             )
-            return [0]  # Default value for unexpected types
+            return [0]
+
+        # Filter out invalid IDs
+        valid_ids = [aid for aid in result if aid <= max_node_id]
+        if not valid_ids:  # If no valid IDs remain
+            return [0]  # Default value
+        return valid_ids
+
     except Exception as e:
         print(f"WARNING: Error parsing answer_ids: {str(e)}, value: {answer_ids}")
-        return [0]  # Default value on error
+        return [0]
 
 
 @tool(args_schema=StarkEvalInput)
@@ -75,37 +73,34 @@ def evaluate_stark_retrieval(
 
         print(f"Loaded {len(queries_df)} queries and {len(nodes_df)} nodes.")
 
-        # Print sample data for debugging
-        print("\nSample answer_ids before parsing:")
-        print(queries_df["answer_ids"].head())
-
-        # Parse answer_ids safely
-        queries_df["answer_ids"] = queries_df.answer_ids.apply(parse_answer_ids)
-
-        print("\nSample answer_ids after parsing:")
-        print(queries_df["answer_ids"].head())
-
-        # Validate answer IDs
-        try:
-            max_answer_id = max(max(aids) for aids in queries_df.answer_ids if aids)
-            print(f"\nMax answer ID: {max_answer_id}")
-        except Exception as e:
-            print(f"Error finding max answer ID: {str(e)}")
-            max_answer_id = 0
-
+        # Get max node ID first
         max_node_id = max(nodes_df.node_id)
         print(f"Max node ID: {max_node_id}")
 
-        if max_answer_id > max_node_id:
-            raise ValueError(
-                f"Answer ID {max_answer_id} exceeds maximum node ID {max_node_id}"
-            )
+        print("\nSample answer_ids before filtering:")
+        print(queries_df["answer_ids"].head())
 
-        # Rest of your code remains the same...
+        # Parse and filter answer_ids
+        queries_df["answer_ids"] = queries_df.answer_ids.apply(
+            lambda x: parse_answer_ids(x, max_node_id)
+        )
+
+        print("\nSample answer_ids after filtering:")
+        print(queries_df["answer_ids"].head())
+
+        # Print statistics about filtered data
+        original_answers = [len(aids) for aids in queries_df.answer_ids]
+        total_original = sum(original_answers)
+        filtered_answers = [len(aids) for aids in queries_df.answer_ids]
+        total_filtered = sum(filtered_answers)
+
+        print(f"\nTotal answer IDs before filtering: {total_original}")
+        print(f"Total answer IDs after filtering: {total_filtered}")
+        print(f"Filtered out {total_original - total_filtered} invalid IDs")
 
         # Set device
         device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        print(f"Using device: {device}")
+        print(f"\nUsing device: {device}")
 
         # Prepare node IDs
         candidate_ids = torch.LongTensor(nodes_df.node_id.tolist())
@@ -154,7 +149,7 @@ def evaluate_stark_retrieval(
         ]
 
         # Process in batches
-        print(f"Processing {len(queries_df)} queries in batches of {batch_size}...")
+        print(f"\nProcessing {len(queries_df)} queries in batches of {batch_size}...")
 
         for batch_start in range(0, len(queries_df), batch_size):
             batch_end = min(batch_start + batch_size, len(queries_df))
@@ -166,9 +161,6 @@ def evaluate_stark_retrieval(
 
             # Convert answer IDs to tensors
             answer_ids = [torch.LongTensor(aids) for aids in batch_queries.answer_ids]
-
-            # Add debugging info
-            print(f"Sample answer_ids in batch: {answer_ids[:2]}")
 
             batch_results = evaluate_batch(
                 candidate_ids=candidate_ids,
