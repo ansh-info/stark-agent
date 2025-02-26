@@ -61,141 +61,196 @@ def parse_answer_ids(answer_ids, max_node_id):
         return [0]
 
 
+def compute_similarities_in_chunks(
+    query_embeddings: torch.Tensor,
+    node_embeddings: torch.Tensor,
+    chunk_size: int = 1000,
+    device: str = "cpu"
+) -> torch.Tensor:
+    """Compute similarities in chunks to save memory."""
+    total_queries = query_embeddings.shape[0]
+    total_nodes = node_embeddings.shape[0]
+    similarity_matrix = torch.zeros((total_queries, total_nodes), dtype=torch.float32)
+    
+    total_chunks = (total_queries + chunk_size - 1) // chunk_size
+    print(f"Processing {total_chunks} chunks of size {chunk_size}")
+    
+    for i in range(0, total_queries, chunk_size):
+        chunk_num = i // chunk_size + 1
+        end_idx = min(i + chunk_size, total_queries)
+        print(f"Processing chunk {chunk_num}/{total_chunks} (queries {i} to {end_idx})")
+        
+        try:
+            chunk_query = query_embeddings[i:end_idx].to(device)
+            chunk_similarity = torch.matmul(chunk_query, node_embeddings.T.to(device)).cpu()
+            similarity_matrix[i:end_idx] = chunk_similarity
+            
+            print(f"Chunk {chunk_num} completed successfully")
+            
+        except Exception as e:
+            print(f"Error in chunk {chunk_num}: {str(e)}")
+            raise
+            
+    return similarity_matrix
+
 @tool(args_schema=StarkEvalInput)
 def evaluate_stark_retrieval(
-    query_file: str, node_file: str, batch_size: int = 256, split: str = "test-0.1"
+    query_file: str,
+    node_file: str,
+    batch_size: int = 256,
+    split: str = "test-0.1"
 ) -> Dict[str, Any]:
     """Evaluate retrieval performance using StarkQA benchmark."""
     try:
+        print("\n=== Starting Evaluation ===")
+        
         # Load data
+        print("\nStep 1: Loading data files")
         queries_df = pd.read_parquet(query_file)
         nodes_df = pd.read_parquet(node_file)
-
-        print(f"Loaded {len(queries_df)} queries and {len(nodes_df)} nodes.")
-
-        # Get max node ID first
+        print(f"✓ Loaded {len(queries_df)} queries and {len(nodes_df)} nodes")
+        
+        # Memory check
+        query_size = sys.getsizeof(queries_df) / (1024 * 1024)
+        node_size = sys.getsizeof(nodes_df) / (1024 * 1024)
+        print(f"Memory usage - Queries: {query_size:.2f}MB, Nodes: {node_size:.2f}MB")
+        
+        # Get max node ID
         max_node_id = max(nodes_df.node_id)
-        print(f"Max node ID: {max_node_id}")
-
-        print("\nSample answer_ids before filtering:")
-        print(queries_df["answer_ids"].head())
-
-        # Parse and filter answer_ids
-        queries_df["answer_ids"] = queries_df.answer_ids.apply(
-            lambda x: parse_answer_ids(x, max_node_id)
-        )
-
-        print("\nSample answer_ids after filtering:")
-        print(queries_df["answer_ids"].head())
-
-        # Print statistics about filtered data
-        original_answers = [len(aids) for aids in queries_df.answer_ids]
-        total_original = sum(original_answers)
-        filtered_answers = [len(aids) for aids in queries_df.answer_ids]
-        total_filtered = sum(filtered_answers)
-
-        print(f"\nTotal answer IDs before filtering: {total_original}")
-        print(f"Total answer IDs after filtering: {total_filtered}")
-        print(f"Filtered out {total_original - total_filtered} invalid IDs")
-
-        # Set device
-        device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        print(f"\nUsing device: {device}")
-
-        # Prepare node IDs
-        candidate_ids = torch.LongTensor(nodes_df.node_id.tolist())
-
+        print(f"✓ Max node ID: {max_node_id}")
+        
         # Process embeddings
-        print("Processing embeddings...")
-        query_embeddings_list = [
-            np.array(emb) for emb in queries_df.query_embedded.values
-        ]
-        node_embeddings_list = [np.array(emb) for emb in nodes_df.x.values]
-
-        print("Computing similarities...")
-
-        # Calculate similarities with explicit dtype
-        query_embeddings = torch.tensor(
-            np.stack(query_embeddings_list), dtype=torch.float32
-        ).to(device)
-
-        node_embeddings = torch.tensor(
-            np.stack(node_embeddings_list), dtype=torch.float32
-        ).to(device)
-
-        similarity = torch.matmul(query_embeddings, node_embeddings.T).cpu()
-        similarity = similarity.to(torch.float32)
-
-        pred_ids = candidate_ids
-        pred = similarity.t()
-
-        # Initialize results
-        eval_results = []
-        metrics = [
-            "mrr",
-            "map",
-            "rprecision",
-            "recall@5",
-            "recall@10",
-            "recall@20",
-            "recall@50",
-            "recall@100",
-            "hit@1",
-            "hit@3",
-            "hit@5",
-            "hit@10",
-            "hit@20",
-            "hit@50",
-        ]
-
-        # Process in batches
-        print(f"\nProcessing {len(queries_df)} queries in batches of {batch_size}...")
-
-        for batch_start in range(0, len(queries_df), batch_size):
-            batch_end = min(batch_start + batch_size, len(queries_df))
-            batch_queries = queries_df.iloc[batch_start:batch_end]
-
-            print(
-                f"Processing batch {batch_start//batch_size + 1}/{(len(queries_df) + batch_size - 1)//batch_size}"
+        print("\nStep 2: Converting embeddings to tensors")
+        try:
+            query_embeddings = torch.tensor(
+                np.stack([np.array(emb) for emb in queries_df.query_embedded.values]),
+                dtype=torch.float32
             )
-
-            # Convert answer IDs to tensors
-            answer_ids = [torch.LongTensor(aids) for aids in batch_queries.answer_ids]
-
-            batch_results = evaluate_batch(
-                candidate_ids=candidate_ids,
-                pred_ids=pred_ids,
-                pred=pred[:, batch_start:batch_end],
-                answer_ids=answer_ids,
-                metrics=metrics,
-                device=device,
+            node_embeddings = torch.tensor(
+                np.stack([np.array(emb) for emb in nodes_df.x.values]),
+                dtype=torch.float32
             )
-
-            for i, result in enumerate(batch_results):
-                result["query_id"] = batch_queries.iloc[i].id
-                eval_results.append(result)
-
-        print("Computing mean metrics...")
-        mean_metrics = {}
-        for metric in metrics:
-            mean_metrics[metric] = float(np.mean([r[metric] for r in eval_results]))
-
-        # Update shared state
-        shared_state.set(config.StateKeys.EVALUATION_RESULTS, eval_results)
-        shared_state.set(config.StateKeys.METRICS, mean_metrics)
-
-        print("Evaluation complete.")
+            print(f"✓ Created tensors - Queries: {query_embeddings.shape}, Nodes: {node_embeddings.shape}")
+        except Exception as e:
+            print(f"Error creating tensors: {str(e)}")
+            raise
+        
+        # Compute similarities
+        print("\nStep 3: Computing similarities")
+        try:
+            similarity = compute_similarities_in_chunks(
+                query_embeddings,
+                node_embeddings,
+                chunk_size=1000,
+                device="cpu"
+            )
+            print("✓ Similarity computation complete")
+        except Exception as e:
+            print(f"Error computing similarities: {str(e)}")
+            raise
+        
+        # Process node similarities
+        print("\nStep 4: Computing node similarities")
+        try:
+            chunk_size = 500
+            node_similarities = []
+            total_chunks = (len(nodes_df) + chunk_size - 1) // chunk_size
+            
+            for i in range(0, len(nodes_df), chunk_size):
+                chunk_num = i // chunk_size + 1
+                end_idx = min(i + chunk_size, len(nodes_df))
+                print(f"Processing node chunk {chunk_num}/{total_chunks}")
+                
+                chunk_embeddings = node_embeddings[i:end_idx]
+                chunk_similarities = torch.nn.functional.cosine_similarity(
+                    chunk_embeddings.unsqueeze(1),
+                    node_embeddings.unsqueeze(0),
+                    dim=2
+                )
+                node_similarities.append(chunk_similarities.cpu())
+            
+            node_similarities = torch.cat(node_similarities, dim=0).numpy()
+            print("✓ Node similarities computation complete")
+        except Exception as e:
+            print(f"Error computing node similarities: {str(e)}")
+            raise
+        
+        # Compute metrics
+        print("\nStep 5: Computing evaluation metrics")
+        try:
+            pred_ids = torch.LongTensor(nodes_df.node_id.tolist())
+            pred = similarity.t()
+            
+            eval_results = []
+            metrics = [
+                "mrr", "map", "rprecision",
+                "recall@5", "recall@10", "recall@20", "recall@50", "recall@100",
+                "hit@1", "hit@3", "hit@5", "hit@10", "hit@20", "hit@50"
+            ]
+            
+            total_batches = (len(queries_df) + batch_size - 1) // batch_size
+            for batch_start in range(0, len(queries_df), batch_size):
+                batch_num = batch_start // batch_size + 1
+                batch_end = min(batch_start + batch_size, len(queries_df))
+                print(f"Processing evaluation batch {batch_num}/{total_batches}")
+                
+                batch_queries = queries_df.iloc[batch_start:batch_end]
+                answer_ids = [torch.LongTensor(aids) for aids in batch_queries.answer_ids]
+                
+                batch_results = evaluate_batch(
+                    candidate_ids=pred_ids,
+                    pred_ids=pred_ids,
+                    pred=pred[:, batch_start:batch_end],
+                    answer_ids=answer_ids,
+                    metrics=metrics,
+                    device="cpu"
+                )
+                
+                for i, result in enumerate(batch_results):
+                    result["query_id"] = batch_queries.iloc[i].id
+                    eval_results.append(result)
+            
+            print("✓ Metrics computation complete")
+        except Exception as e:
+            print(f"Error computing metrics: {str(e)}")
+            raise
+        
+        # Calculate final metrics
+        print("\nStep 6: Computing final results")
+        try:
+            mean_metrics = {}
+            for metric in metrics:
+                mean_metrics[metric] = float(np.mean([r[metric] for r in eval_results]))
+            
+            shared_state.set(
+                config.StateKeys.KNOWLEDGE_GRAPH,
+                {
+                    "nodes": nodes_df.to_dict("records"),
+                    "similarities": node_similarities.tolist()
+                }
+            )
+            shared_state.set(config.StateKeys.EVALUATION_RESULTS, eval_results)
+            shared_state.set(config.StateKeys.METRICS, mean_metrics)
+            
+            print("✓ Final results computed and stored")
+        except Exception as e:
+            print(f"Error in final computations: {str(e)}")
+            raise
+        
+        print("\n=== Evaluation Complete ===")
         return {
             "status": "success",
             "metrics": mean_metrics,
             "detailed_results": eval_results,
             "total_evaluated": len(eval_results),
-            "message": f"Successfully evaluated {len(eval_results)} queries",
+            "nodes": len(nodes_df),
+            "message": f"Successfully evaluated {len(eval_results)} queries"
         }
-
+    
     except Exception as e:
-        print(f"Error in evaluation process: {str(e)}")
-        raise ToolException(f"Error in evaluation process: {str(e)}")
+        error_msg = f"Error in evaluation process: {str(e)}"
+        print(f"\n!!! ERROR !!!\n{error_msg}")
+        raise ToolException(error_msg)tion(f"Error in evaluation process: {str(e)}")
 
 
 def evaluate_batch(

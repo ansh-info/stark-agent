@@ -34,9 +34,15 @@ def render_metrics_visualization(metrics: dict):
     st.dataframe(metrics_df)
 
 
-def render_knowledge_graph(nodes_df, similarity_matrix=None):
+def render_knowledge_graph(nodes_df):
     """Render knowledge graph visualization"""
     import networkx as nx
+
+    # Get similarities from shared state
+    graph_data = shared_state.get(config.StateKeys.KNOWLEDGE_GRAPH)
+    if not graph_data:
+        st.warning("No knowledge graph data available")
+        return
 
     # Create graph
     G = nx.Graph()
@@ -45,21 +51,25 @@ def render_knowledge_graph(nodes_df, similarity_matrix=None):
     for _, row in nodes_df.iterrows():
         G.add_node(row["node_id"], name=row["node_name"], type=row["node_type"])
 
-    # Add edges based on similarity if available
-    if similarity_matrix is not None:
-        threshold = 0.5  # Similarity threshold
-        edges = []
-        for i in range(len(nodes_df)):
-            for j in range(i + 1, len(nodes_df)):
-                if similarity_matrix[i, j] > threshold:
-                    edges.append(
-                        (
-                            nodes_df.iloc[i]["node_id"],
-                            nodes_df.iloc[j]["node_id"],
-                            similarity_matrix[i, j],
-                        )
-                    )
-        G.add_weighted_edges_from(edges)
+    # Add edges based on similarity
+    similarity_matrix = np.array(graph_data["similarities"])
+    threshold = 0.7  # High similarity threshold
+    num_nodes = len(nodes_df)
+
+    # Add top K most similar edges for each node
+    K = 5  # Number of edges per node
+    for i in range(num_nodes):
+        # Get top K similar nodes
+        similarities = similarity_matrix[i]
+        top_k_indices = np.argsort(similarities)[-K - 1 :]  # Get K+1 for excluding self
+
+        for j in top_k_indices:
+            if i < j and similarities[j] > threshold:  # Avoid duplicate edges
+                G.add_edge(
+                    nodes_df.iloc[i]["node_id"],
+                    nodes_df.iloc[j]["node_id"],
+                    weight=float(similarities[j]),
+                )
 
     # Create layout
     pos = nx.spring_layout(G)
@@ -67,49 +77,154 @@ def render_knowledge_graph(nodes_df, similarity_matrix=None):
     # Create plotly figure
     edge_x = []
     edge_y = []
-    for edge in G.edges():
+    edge_weights = []
+
+    for edge in G.edges(data=True):
         x0, y0 = pos[edge[0]]
         x1, y1 = pos[edge[1]]
         edge_x.extend([x0, x1, None])
         edge_y.extend([y0, y1, None])
+        edge_weights.extend([edge[2]["weight"], edge[2]["weight"], None])
 
-    node_x = [pos[node][0] for node in G.nodes()]
-    node_y = [pos[node][1] for node in G.nodes()]
+    edge_trace = go.Scatter(
+        x=edge_x,
+        y=edge_y,
+        line=dict(width=1, color="#888"),
+        hoverinfo="none",
+        mode="lines",
+    )
+
+    node_x = []
+    node_y = []
+    node_text = []
+    node_colors = []
+
+    for node in G.nodes():
+        x, y = pos[node]
+        node_x.append(x)
+        node_y.append(y)
+        node_info = nodes_df[nodes_df.node_id == node].iloc[0]
+        node_text.append(
+            f"ID: {node}<br>Name: {node_info['node_name']}<br>Type: {node_info['node_type']}"
+        )
+        node_colors.append(hash(node_info["node_type"]) % 20)
+
+    node_trace = go.Scatter(
+        x=node_x,
+        y=node_y,
+        mode="markers",
+        hoverinfo="text",
+        text=node_text,
+        marker=dict(
+            size=10,
+            color=node_colors,
+            colorscale="Viridis",
+            showscale=True,
+            colorbar=dict(title="Node Types"),
+        ),
+    )
 
     fig = go.Figure(
-        data=[
-            go.Scatter(
-                x=edge_x,
-                y=edge_y,
-                line=dict(width=0.5, color="#888"),
-                hoverinfo="none",
-                mode="lines",
-            ),
-            go.Scatter(
-                x=node_x,
-                y=node_y,
-                mode="markers",
-                hoverinfo="text",
-                text=[f"{nodes_df.iloc[i]['node_name']}" for i in range(len(nodes_df))],
-                marker=dict(
-                    size=10,
-                    color=nodes_df["node_type"].astype("category").cat.codes,
-                    colorscale="Viridis",
-                    showscale=True,
-                ),
-            ),
-        ],
+        data=[edge_trace, node_trace],
         layout=go.Layout(
-            title="Knowledge Graph",
+            title=f"Knowledge Graph Visualization (showing top {K} connections per node)",
             showlegend=False,
             hovermode="closest",
             margin=dict(b=20, l=5, r=5, t=40),
+            annotations=[
+                dict(
+                    text="Note: Edges show strong similarity connections",
+                    showarrow=False,
+                    xref="paper",
+                    yref="paper",
+                    x=0,
+                    y=0,
+                )
+            ],
             xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
             yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
         ),
     )
 
     st.plotly_chart(fig)
+
+
+def process_chat_query(query: str) -> str:
+    """Process chat queries through the agent hierarchy"""
+    try:
+        # Route through main agent
+        response = main_agent.invoke({"messages": [{"role": "user", "content": query}]})
+
+        # Check if we have evaluation results
+        eval_results = shared_state.get(config.StateKeys.EVALUATION_RESULTS)
+        if eval_results and "How can I help you with the evaluation?" in response.get(
+            "response", ""
+        ):
+            metrics = shared_state.get(config.StateKeys.METRICS)
+            # Provide context-aware response
+            return f"""Based on our evaluation results:
+- MRR: {metrics['mrr']:.3f} (ranks first correct answer around position {1/metrics['mrr']:.0f})
+- MAP: {metrics['map']:.3f}
+- Recall@100: {metrics['recall@100']:.3f} (finding {metrics['recall@100']*100:.1f}% of relevant items)
+
+How can I help you understand these metrics better?"""
+
+        return response.get(
+            "response", "I'm here to help you understand the evaluation results."
+        )
+    except Exception as e:
+        return f"I apologize, but I encountered an error: {str(e)}"
+
+
+def render_evaluation_section():
+    """Render the evaluation section of the UI"""
+    st.header("Evaluation")
+
+    if st.button("Run Evaluation"):
+        with st.spinner("Running evaluation..."):
+            try:
+                # Save uploaded files temporarily
+                with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f1:
+                    f1.write(query_file.getvalue())
+                    query_path = f1.name
+
+                with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f2:
+                    f2.write(node_file.getvalue())
+                    node_path = f2.name
+
+                # Run evaluation
+                result = evaluate_stark_retrieval.invoke(
+                    {
+                        "query_file": query_path,
+                        "node_file": node_path,
+                        "batch_size": batch_size,
+                        "split": split,
+                    }
+                )
+
+                if result["status"] == "success":
+                    st.success("✅ Evaluation completed successfully!")
+
+                    with st.expander("Evaluation Metrics", expanded=True):
+                        # Display metrics
+                        render_metrics_visualization(result["metrics"])
+
+                    with st.expander("Knowledge Graph", expanded=True):
+                        # Get graph data from shared state
+                        graph_data = shared_state.get(config.StateKeys.KNOWLEDGE_GRAPH)
+                        if graph_data:
+                            nodes_df = pd.DataFrame(graph_data["nodes"])
+                            render_knowledge_graph(nodes_df, graph_data["similarities"])
+                        else:
+                            st.warning("No knowledge graph data available")
+
+                else:
+                    st.error(
+                        f"Evaluation failed: {result.get('message', 'Unknown error')}"
+                    )
+
+            except Exception as e:
+                st.error(f"Error during evaluation: {str(e)}")
 
 
 def main():
