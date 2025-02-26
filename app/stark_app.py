@@ -34,9 +34,15 @@ def render_metrics_visualization(metrics: dict):
     st.dataframe(metrics_df)
 
 
-def render_knowledge_graph(nodes_df, similarity_matrix=None):
+def render_knowledge_graph(nodes_df):
     """Render knowledge graph visualization"""
     import networkx as nx
+
+    # Get similarities from shared state
+    graph_data = shared_state.get(config.StateKeys.KNOWLEDGE_GRAPH)
+    if not graph_data:
+        st.warning("No knowledge graph data available")
+        return
 
     # Create graph
     G = nx.Graph()
@@ -45,38 +51,25 @@ def render_knowledge_graph(nodes_df, similarity_matrix=None):
     for _, row in nodes_df.iterrows():
         G.add_node(row["node_id"], name=row["node_name"], type=row["node_type"])
 
-    # Calculate similarities if not provided
-    if similarity_matrix is None and len(nodes_df) > 0:
-        # Convert embeddings to tensors
-        embeddings = torch.tensor(np.stack(nodes_df.x.values))
-
-        # Calculate cosine similarities
-        similarity_matrix = torch.nn.functional.cosine_similarity(
-            embeddings.unsqueeze(1), embeddings.unsqueeze(0), dim=2
-        )
-
     # Add edges based on similarity
-    if similarity_matrix is not None:
-        threshold = 0.7  # High similarity threshold
-        num_nodes = len(nodes_df)
+    similarity_matrix = np.array(graph_data["similarities"])
+    threshold = 0.7  # High similarity threshold
+    num_nodes = len(nodes_df)
 
-        # Add top K most similar edges for each node
-        K = 5  # Number of edges per node
-        for i in range(num_nodes):
-            # Get top K similar nodes
-            similarities = similarity_matrix[i]
-            top_k = torch.topk(similarities, k=min(K + 1, len(similarities)))
+    # Add top K most similar edges for each node
+    K = 5  # Number of edges per node
+    for i in range(num_nodes):
+        # Get top K similar nodes
+        similarities = similarity_matrix[i]
+        top_k_indices = np.argsort(similarities)[-K - 1 :]  # Get K+1 for excluding self
 
-            for k in range(1, len(top_k.indices)):  # Skip self-loop
-                j = top_k.indices[k].item()
-                if i < j:  # Avoid duplicate edges
-                    weight = top_k.values[k].item()
-                    if weight > threshold:
-                        G.add_edge(
-                            nodes_df.iloc[i]["node_id"],
-                            nodes_df.iloc[j]["node_id"],
-                            weight=weight,
-                        )
+        for j in top_k_indices:
+            if i < j and similarities[j] > threshold:  # Avoid duplicate edges
+                G.add_edge(
+                    nodes_df.iloc[i]["node_id"],
+                    nodes_df.iloc[j]["node_id"],
+                    weight=float(similarities[j]),
+                )
 
     # Create layout
     pos = nx.spring_layout(G)
@@ -93,7 +86,6 @@ def render_knowledge_graph(nodes_df, similarity_matrix=None):
         edge_y.extend([y0, y1, None])
         edge_weights.extend([edge[2]["weight"], edge[2]["weight"], None])
 
-    # Create edge trace
     edge_trace = go.Scatter(
         x=edge_x,
         y=edge_y,
@@ -102,7 +94,6 @@ def render_knowledge_graph(nodes_df, similarity_matrix=None):
         mode="lines",
     )
 
-    # Create node trace
     node_x = []
     node_y = []
     node_text = []
@@ -116,9 +107,7 @@ def render_knowledge_graph(nodes_df, similarity_matrix=None):
         node_text.append(
             f"ID: {node}<br>Name: {node_info['node_name']}<br>Type: {node_info['node_type']}"
         )
-        node_colors.append(
-            hash(node_info["node_type"]) % 20
-        )  # Assign colors based on type
+        node_colors.append(hash(node_info["node_type"]) % 20)
 
     node_trace = go.Scatter(
         x=node_x,
@@ -135,7 +124,6 @@ def render_knowledge_graph(nodes_df, similarity_matrix=None):
         ),
     )
 
-    # Create figure
     fig = go.Figure(
         data=[edge_trace, node_trace],
         layout=go.Layout(
@@ -159,6 +147,84 @@ def render_knowledge_graph(nodes_df, similarity_matrix=None):
     )
 
     st.plotly_chart(fig)
+
+
+def process_chat_query(query: str) -> str:
+    """Process chat queries through the agent hierarchy"""
+    try:
+        # Route through main agent
+        response = main_agent.invoke({"messages": [{"role": "user", "content": query}]})
+
+        # Check if we have evaluation results
+        eval_results = shared_state.get(config.StateKeys.EVALUATION_RESULTS)
+        if eval_results and "How can I help you with the evaluation?" in response.get(
+            "response", ""
+        ):
+            metrics = shared_state.get(config.StateKeys.METRICS)
+            # Provide context-aware response
+            return f"""Based on our evaluation results:
+- MRR: {metrics['mrr']:.3f} (ranks first correct answer around position {1/metrics['mrr']:.0f})
+- MAP: {metrics['map']:.3f}
+- Recall@100: {metrics['recall@100']:.3f} (finding {metrics['recall@100']*100:.1f}% of relevant items)
+
+How can I help you understand these metrics better?"""
+
+        return response.get(
+            "response", "I'm here to help you understand the evaluation results."
+        )
+    except Exception as e:
+        return f"I apologize, but I encountered an error: {str(e)}"
+
+
+def render_evaluation_section():
+    """Render the evaluation section of the UI"""
+    st.header("Evaluation")
+
+    if st.button("Run Evaluation"):
+        with st.spinner("Running evaluation..."):
+            try:
+                # Save uploaded files temporarily
+                with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f1:
+                    f1.write(query_file.getvalue())
+                    query_path = f1.name
+
+                with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f2:
+                    f2.write(node_file.getvalue())
+                    node_path = f2.name
+
+                # Run evaluation
+                result = evaluate_stark_retrieval.invoke(
+                    {
+                        "query_file": query_path,
+                        "node_file": node_path,
+                        "batch_size": batch_size,
+                        "split": split,
+                    }
+                )
+
+                if result["status"] == "success":
+                    st.success("✅ Evaluation completed successfully!")
+
+                    with st.expander("Evaluation Metrics", expanded=True):
+                        # Display metrics
+                        render_metrics_visualization(result["metrics"])
+
+                    with st.expander("Knowledge Graph", expanded=True):
+                        # Get graph data from shared state
+                        graph_data = shared_state.get(config.StateKeys.KNOWLEDGE_GRAPH)
+                        if graph_data:
+                            nodes_df = pd.DataFrame(graph_data["nodes"])
+                            render_knowledge_graph(nodes_df, graph_data["similarities"])
+                        else:
+                            st.warning("No knowledge graph data available")
+
+                else:
+                    st.error(
+                        f"Evaluation failed: {result.get('message', 'Unknown error')}"
+                    )
+
+            except Exception as e:
+                st.error(f"Error during evaluation: {str(e)}")
 
 
 def main():
