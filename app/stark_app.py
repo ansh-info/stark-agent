@@ -45,21 +45,38 @@ def render_knowledge_graph(nodes_df, similarity_matrix=None):
     for _, row in nodes_df.iterrows():
         G.add_node(row["node_id"], name=row["node_name"], type=row["node_type"])
 
-    # Add edges based on similarity if available
+    # Calculate similarities if not provided
+    if similarity_matrix is None and len(nodes_df) > 0:
+        # Convert embeddings to tensors
+        embeddings = torch.tensor(np.stack(nodes_df.x.values))
+
+        # Calculate cosine similarities
+        similarity_matrix = torch.nn.functional.cosine_similarity(
+            embeddings.unsqueeze(1), embeddings.unsqueeze(0), dim=2
+        )
+
+    # Add edges based on similarity
     if similarity_matrix is not None:
-        threshold = 0.5  # Similarity threshold
-        edges = []
-        for i in range(len(nodes_df)):
-            for j in range(i + 1, len(nodes_df)):
-                if similarity_matrix[i, j] > threshold:
-                    edges.append(
-                        (
+        threshold = 0.7  # High similarity threshold
+        num_nodes = len(nodes_df)
+
+        # Add top K most similar edges for each node
+        K = 5  # Number of edges per node
+        for i in range(num_nodes):
+            # Get top K similar nodes
+            similarities = similarity_matrix[i]
+            top_k = torch.topk(similarities, k=min(K + 1, len(similarities)))
+
+            for k in range(1, len(top_k.indices)):  # Skip self-loop
+                j = top_k.indices[k].item()
+                if i < j:  # Avoid duplicate edges
+                    weight = top_k.values[k].item()
+                    if weight > threshold:
+                        G.add_edge(
                             nodes_df.iloc[i]["node_id"],
                             nodes_df.iloc[j]["node_id"],
-                            similarity_matrix[i, j],
+                            weight=weight,
                         )
-                    )
-        G.add_weighted_edges_from(edges)
 
     # Create layout
     pos = nx.spring_layout(G)
@@ -67,43 +84,75 @@ def render_knowledge_graph(nodes_df, similarity_matrix=None):
     # Create plotly figure
     edge_x = []
     edge_y = []
-    for edge in G.edges():
+    edge_weights = []
+
+    for edge in G.edges(data=True):
         x0, y0 = pos[edge[0]]
         x1, y1 = pos[edge[1]]
         edge_x.extend([x0, x1, None])
         edge_y.extend([y0, y1, None])
+        edge_weights.extend([edge[2]["weight"], edge[2]["weight"], None])
 
-    node_x = [pos[node][0] for node in G.nodes()]
-    node_y = [pos[node][1] for node in G.nodes()]
+    # Create edge trace
+    edge_trace = go.Scatter(
+        x=edge_x,
+        y=edge_y,
+        line=dict(width=1, color="#888"),
+        hoverinfo="none",
+        mode="lines",
+    )
 
+    # Create node trace
+    node_x = []
+    node_y = []
+    node_text = []
+    node_colors = []
+
+    for node in G.nodes():
+        x, y = pos[node]
+        node_x.append(x)
+        node_y.append(y)
+        node_info = nodes_df[nodes_df.node_id == node].iloc[0]
+        node_text.append(
+            f"ID: {node}<br>Name: {node_info['node_name']}<br>Type: {node_info['node_type']}"
+        )
+        node_colors.append(
+            hash(node_info["node_type"]) % 20
+        )  # Assign colors based on type
+
+    node_trace = go.Scatter(
+        x=node_x,
+        y=node_y,
+        mode="markers",
+        hoverinfo="text",
+        text=node_text,
+        marker=dict(
+            size=10,
+            color=node_colors,
+            colorscale="Viridis",
+            showscale=True,
+            colorbar=dict(title="Node Types"),
+        ),
+    )
+
+    # Create figure
     fig = go.Figure(
-        data=[
-            go.Scatter(
-                x=edge_x,
-                y=edge_y,
-                line=dict(width=0.5, color="#888"),
-                hoverinfo="none",
-                mode="lines",
-            ),
-            go.Scatter(
-                x=node_x,
-                y=node_y,
-                mode="markers",
-                hoverinfo="text",
-                text=[f"{nodes_df.iloc[i]['node_name']}" for i in range(len(nodes_df))],
-                marker=dict(
-                    size=10,
-                    color=nodes_df["node_type"].astype("category").cat.codes,
-                    colorscale="Viridis",
-                    showscale=True,
-                ),
-            ),
-        ],
+        data=[edge_trace, node_trace],
         layout=go.Layout(
-            title="Knowledge Graph",
+            title=f"Knowledge Graph Visualization (showing top {K} connections per node)",
             showlegend=False,
             hovermode="closest",
             margin=dict(b=20, l=5, r=5, t=40),
+            annotations=[
+                dict(
+                    text="Note: Edges show strong similarity connections",
+                    showarrow=False,
+                    xref="paper",
+                    yref="paper",
+                    x=0,
+                    y=0,
+                )
+            ],
             xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
             yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
         ),
