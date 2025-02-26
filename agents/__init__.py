@@ -1,3 +1,7 @@
+"""
+Imports all the configuration files
+"""
+
 # Expose main agent and StarkQA agent at package level
 from agents.main_agent import main_agent
 from agents.stark_agent import stark_agent

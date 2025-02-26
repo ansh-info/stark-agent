@@ -1,3 +1,7 @@
+"""
+Imports all the configuration files
+"""
+
 from tools.stark.evaluation_retrival import evaluate_stark_retrieval
 
 stark_tools = [
