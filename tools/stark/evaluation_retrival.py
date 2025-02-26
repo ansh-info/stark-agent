@@ -63,7 +63,10 @@ def parse_answer_ids(answer_ids, max_node_id):
 
 @tool(args_schema=StarkEvalInput)
 def evaluate_stark_retrieval(
-    query_file: str, node_file: str, batch_size: int = 256, split: str = "test-0.1"
+    query_file: str,
+    node_file: str,
+    batch_size: int = 256,
+    split: str = "test-0.1"
 ) -> Dict[str, Any]:
     """Evaluate retrieval performance using StarkQA benchmark."""
     try:
@@ -114,7 +117,7 @@ def evaluate_stark_retrieval(
 
         print("Computing similarities...")
 
-        # Calculate similarities for visualization
+        # Calculate similarities with explicit dtype
         query_embeddings = torch.tensor(
             np.stack(query_embeddings_list), dtype=torch.float32
         ).to(device)
@@ -123,23 +126,16 @@ def evaluate_stark_retrieval(
             np.stack(node_embeddings_list), dtype=torch.float32
         ).to(device)
 
-        # Calculate node similarities for graph
-        node_similarities = (
-            torch.nn.functional.cosine_similarity(
-                node_embeddings.unsqueeze(1), node_embeddings.unsqueeze(0), dim=2
-            )
-            .cpu()
-            .numpy()
-        )
-
-        # Store in shared state for visualization
-        shared_state.set(
-            config.StateKeys.KNOWLEDGE_GRAPH,
-            {"nodes": nodes_df.to_dict("records"), "similarities": node_similarities},
-        )
-
+        # Calculate query-node similarities
         similarity = torch.matmul(query_embeddings, node_embeddings.T).cpu()
         similarity = similarity.to(torch.float32)
+
+        # Calculate node-node similarities for knowledge graph
+        node_similarities = torch.nn.functional.cosine_similarity(
+            node_embeddings.unsqueeze(1),
+            node_embeddings.unsqueeze(0),
+            dim=2
+        ).cpu().numpy()
 
         pred_ids = candidate_ids
         pred = similarity.t()
@@ -177,25 +173,42 @@ def evaluate_stark_retrieval(
             # Convert answer IDs to tensors
             answer_ids = [torch.LongTensor(aids) for aids in batch_queries.answer_ids]
 
-            batch_results = evaluate_batch(
-                candidate_ids=candidate_ids,
-                pred_ids=pred_ids,
-                pred=pred[:, batch_start:batch_end],
-                answer_ids=answer_ids,
-                metrics=metrics,
-                device=device,
-            )
+            # Evaluate batch
+            try:
+                batch_results = evaluate_batch(
+                    candidate_ids=candidate_ids,
+                    pred_ids=pred_ids,
+                    pred=pred[:, batch_start:batch_end],
+                    answer_ids=answer_ids,
+                    metrics=metrics,
+                    device=device,
+                )
+            except Exception as e:
+                raise ValueError(
+                    f"Error in batch {batch_start//batch_size + 1}: {str(e)}"
+                )
 
+            # Add query IDs and metadata
             for i, result in enumerate(batch_results):
                 result["query_id"] = batch_queries.iloc[i].id
                 eval_results.append(result)
 
         print("Computing mean metrics...")
+        # Calculate mean metrics
         mean_metrics = {}
         for metric in metrics:
             mean_metrics[metric] = float(np.mean([r[metric] for r in eval_results]))
 
-        # Update shared state
+        # Store graph data in shared state
+        shared_state.set(
+            config.StateKeys.KNOWLEDGE_GRAPH,
+            {
+                "nodes": nodes_df.to_dict("records"),
+                "similarities": node_similarities.tolist()  # Convert to list for JSON serialization
+            }
+        )
+
+        # Update evaluation results in shared state
         shared_state.set(config.StateKeys.EVALUATION_RESULTS, eval_results)
         shared_state.set(config.StateKeys.METRICS, mean_metrics)
 
@@ -206,12 +219,12 @@ def evaluate_stark_retrieval(
             "detailed_results": eval_results,
             "total_evaluated": len(eval_results),
             "nodes": len(nodes_df),
-            "message": f"Successfully evaluated {len(eval_results)} queries",
+            "message": f"Successfully evaluated {len(eval_results)} queries"
         }
 
     except Exception as e:
         print(f"Error in evaluation process: {str(e)}")
-        raise ToolException(f"Error in evaluation process: {str(e)}")
+        raise ToolException(f"Error in evaluation process: {str(e)}")eption(f"Error in evaluation process: {str(e)}")
 
 
 def evaluate_batch(
