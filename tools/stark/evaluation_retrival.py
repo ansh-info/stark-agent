@@ -114,7 +114,7 @@ def evaluate_stark_retrieval(
 
         print("Computing similarities...")
 
-        # Calculate similarities with explicit dtype
+        # Calculate similarities for visualization
         query_embeddings = torch.tensor(
             np.stack(query_embeddings_list), dtype=torch.float32
         ).to(device)
@@ -122,6 +122,21 @@ def evaluate_stark_retrieval(
         node_embeddings = torch.tensor(
             np.stack(node_embeddings_list), dtype=torch.float32
         ).to(device)
+
+        # Calculate node similarities for graph
+        node_similarities = (
+            torch.nn.functional.cosine_similarity(
+                node_embeddings.unsqueeze(1), node_embeddings.unsqueeze(0), dim=2
+            )
+            .cpu()
+            .numpy()
+        )
+
+        # Store in shared state for visualization
+        shared_state.set(
+            config.StateKeys.KNOWLEDGE_GRAPH,
+            {"nodes": nodes_df.to_dict("records"), "similarities": node_similarities},
+        )
 
         similarity = torch.matmul(query_embeddings, node_embeddings.T).cpu()
         similarity = similarity.to(torch.float32)
@@ -190,6 +205,7 @@ def evaluate_stark_retrieval(
             "metrics": mean_metrics,
             "detailed_results": eval_results,
             "total_evaluated": len(eval_results),
+            "nodes": len(nodes_df),
             "message": f"Successfully evaluated {len(eval_results)} queries",
         }
 
