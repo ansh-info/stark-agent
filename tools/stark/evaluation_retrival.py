@@ -1,13 +1,12 @@
+import base64
+import io
 from typing import Any, Dict, List, Optional, Union
+
 import numpy as np
 import pandas as pd
 import torch
 from langchain_core.tools import ToolException, tool
 from pydantic import BaseModel, Field
-from state.shared_state import shared_state
-from config.config import config
-import base64
-import io
 from torchmetrics.functional.retrieval import (
     retrieval_average_precision,
     retrieval_hit_rate,
@@ -17,6 +16,9 @@ from torchmetrics.functional.retrieval import (
     retrieval_recall,
     retrieval_reciprocal_rank,
 )
+
+from config.config import config
+from state.shared_state import shared_state
 
 
 class StarkEvalInput(BaseModel):

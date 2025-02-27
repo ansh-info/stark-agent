@@ -8,6 +8,7 @@ sys.path.append(project_root)
 
 import tempfile
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -23,133 +24,135 @@ from tools.stark.evaluation_retrival import (
 )  # Note the correct filename
 
 
-def render_metrics_visualization(metrics: dict):
+def render_metrics_visualization(metrics: Dict[str, float]):
     """Render evaluation metrics visualization"""
-    # Create bar chart for metrics
-    metrics_df = pd.DataFrame(list(metrics.items()), columns=["Metric", "Value"])
-    fig = px.bar(metrics_df, x="Metric", y="Value", title="Evaluation Metrics")
-    st.plotly_chart(fig)
+    try:
+        # Create metrics DataFrame
+        metrics_df = pd.DataFrame(list(metrics.items()), columns=["Metric", "Value"])
 
-    # Create detailed metrics table
-    st.dataframe(metrics_df)
-
-
-def render_knowledge_graph(nodes_df):
-    """Render knowledge graph visualization"""
-    import networkx as nx
-
-    # Get similarities from shared state
-    graph_data = shared_state.get(config.StateKeys.KNOWLEDGE_GRAPH)
-    if not graph_data:
-        st.warning("No knowledge graph data available")
-        return
-
-    # Create graph
-    G = nx.Graph()
-
-    # Add nodes
-    for _, row in nodes_df.iterrows():
-        G.add_node(row["node_id"], name=row["node_name"], type=row["node_type"])
-
-    # Add edges based on similarity
-    similarity_matrix = np.array(graph_data["similarities"])
-    threshold = 0.7  # High similarity threshold
-    num_nodes = len(nodes_df)
-
-    # Add top K most similar edges for each node
-    K = 5  # Number of edges per node
-    for i in range(num_nodes):
-        # Get top K similar nodes
-        similarities = similarity_matrix[i]
-        top_k_indices = np.argsort(similarities)[-K - 1 :]  # Get K+1 for excluding self
-
-        for j in top_k_indices:
-            if i < j and similarities[j] > threshold:  # Avoid duplicate edges
-                G.add_edge(
-                    nodes_df.iloc[i]["node_id"],
-                    nodes_df.iloc[j]["node_id"],
-                    weight=float(similarities[j]),
-                )
-
-    # Create layout
-    pos = nx.spring_layout(G)
-
-    # Create plotly figure
-    edge_x = []
-    edge_y = []
-    edge_weights = []
-
-    for edge in G.edges(data=True):
-        x0, y0 = pos[edge[0]]
-        x1, y1 = pos[edge[1]]
-        edge_x.extend([x0, x1, None])
-        edge_y.extend([y0, y1, None])
-        edge_weights.extend([edge[2]["weight"], edge[2]["weight"], None])
-
-    edge_trace = go.Scatter(
-        x=edge_x,
-        y=edge_y,
-        line=dict(width=1, color="#888"),
-        hoverinfo="none",
-        mode="lines",
-    )
-
-    node_x = []
-    node_y = []
-    node_text = []
-    node_colors = []
-
-    for node in G.nodes():
-        x, y = pos[node]
-        node_x.append(x)
-        node_y.append(y)
-        node_info = nodes_df[nodes_df.node_id == node].iloc[0]
-        node_text.append(
-            f"ID: {node}<br>Name: {node_info['node_name']}<br>Type: {node_info['node_type']}"
+        # Create bar chart
+        fig = px.bar(
+            metrics_df,
+            x="Metric",
+            y="Value",
+            title="Evaluation Metrics",
+            labels={"Value": "Score", "Metric": "Metric Name"},
+            color="Value",
+            color_continuous_scale="Viridis",
         )
-        node_colors.append(hash(node_info["node_type"]) % 20)
 
-    node_trace = go.Scatter(
-        x=node_x,
-        y=node_y,
-        mode="markers",
-        hoverinfo="text",
-        text=node_text,
-        marker=dict(
-            size=10,
-            color=node_colors,
-            colorscale="Viridis",
-            showscale=True,
-            colorbar=dict(title="Node Types"),
-        ),
-    )
+        # Update layout
+        fig.update_layout(xaxis_tickangle=-45, showlegend=False, height=500)
 
-    fig = go.Figure(
-        data=[edge_trace, node_trace],
-        layout=go.Layout(
-            title=f"Knowledge Graph Visualization (showing top {K} connections per node)",
-            showlegend=False,
-            hovermode="closest",
-            margin=dict(b=20, l=5, r=5, t=40),
-            annotations=[
-                dict(
-                    text="Note: Edges show strong similarity connections",
-                    showarrow=False,
-                    xref="paper",
-                    yref="paper",
-                    x=0,
-                    y=0,
-                )
-            ],
-            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-        ),
-    )
+        st.plotly_chart(fig, use_container_width=True)
 
-    st.plotly_chart(fig)
+        # Display detailed metrics table
+        st.subheader("Detailed Metrics")
+        st.dataframe(metrics_df.style.format({"Value": "{:.3f}"}))
+
+    except Exception as e:
+        st.error(f"Error rendering metrics visualization: {str(e)}")
 
 
-def process_chat_query(query: str) -> str:
+def render_knowledge_graph(graph_data):
+    """Render knowledge graph visualization"""
+    try:
+        nodes_df = pd.DataFrame(graph_data["nodes"])
+        similarities = np.array(graph_data["similarities"])
+
+        G = nx.Graph()
+
+        # Add nodes
+        for _, row in nodes_df.iterrows():
+            G.add_node(
+                row["node_id"],
+                name=row.get("node_name", ""),
+                type=row.get("node_type", ""),
+            )
+
+        # Add edges (top K similar nodes)
+        K = 5
+        threshold = 0.7
+
+        for i in range(len(nodes_df)):
+            similar_indices = np.argsort(similarities[i])[-K - 1 :]
+            for j in similar_indices:
+                if i < j and similarities[i][j] > threshold:
+                    G.add_edge(
+                        nodes_df.iloc[i]["node_id"],
+                        nodes_df.iloc[j]["node_id"],
+                        weight=float(similarities[i][j]),
+                    )
+
+        pos = nx.spring_layout(G)
+
+        edge_x = []
+        edge_y = []
+        edge_weights = []
+
+        for edge in G.edges(data=True):
+            x0, y0 = pos[edge[0]]
+            x1, y1 = pos[edge[1]]
+            edge_x.extend([x0, x1, None])
+            edge_y.extend([y0, y1, None])
+            edge_weights.extend([edge[2].get("weight", 0.5)])
+
+        edge_trace = go.Scatter(
+            x=edge_x,
+            y=edge_y,
+            line=dict(width=1, color="#888"),
+            hoverinfo="none",
+            mode="lines",
+        )
+
+        node_x = []
+        node_y = []
+        node_text = []
+        node_colors = []
+
+        for node in G.nodes():
+            x, y = pos[node]
+            node_x.append(x)
+            node_y.append(y)
+            node_info = nodes_df[nodes_df.node_id == node].iloc[0]
+            node_text.append(f"ID: {node}<br>Name: {node_info.get('node_name', '')}")
+            node_colors.append(hash(node_info.get("node_type", "")) % 20)
+
+        node_trace = go.Scatter(
+            x=node_x,
+            y=node_y,
+            mode="markers",
+            hoverinfo="text",
+            text=node_text,
+            marker=dict(
+                size=10,
+                color=node_colors,
+                colorscale="Viridis",
+                showscale=True,
+                colorbar=dict(
+                    thickness=15, title="Node Types", xanchor="left", titleside="right"
+                ),
+            ),
+        )
+
+        fig = go.Figure(
+            data=[edge_trace, node_trace],
+            layout=go.Layout(
+                showlegend=False,
+                hovermode="closest",
+                margin=dict(b=20, l=5, r=5, t=40),
+                xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            ),
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+    except Exception as e:
+        st.error(f"Error rendering knowledge graph: {str(e)}")
+
+
+def process_chat_query(query: str) -> str:  # <-- Add this function here
     """Process chat queries through the agent hierarchy"""
     try:
         # Route through main agent
@@ -176,55 +179,26 @@ How can I help you understand these metrics better?"""
         return f"I apologize, but I encountered an error: {str(e)}"
 
 
-def render_evaluation_section():
-    """Render the evaluation section of the UI"""
-    st.header("Evaluation")
+def show_debug_output():
+    """Show debug output in the UI"""
+    with st.expander("Debug Output", expanded=True):
+        debug_placeholder = st.empty()
 
-    if st.button("Run Evaluation"):
-        with st.spinner("Running evaluation..."):
-            try:
-                # Save uploaded files temporarily
-                with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f1:
-                    f1.write(query_file.getvalue())
-                    query_path = f1.name
+        # Create a queue for debug messages
+        if "debug_messages" not in st.session_state:
+            st.session_state.debug_messages = []
 
-                with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as f2:
-                    f2.write(node_file.getvalue())
-                    node_path = f2.name
+        # Display debug messages
+        debug_text = "\n".join(st.session_state.debug_messages)
+        debug_placeholder.text_area(
+            "Process Log", value=debug_text, height=300, disabled=True
+        )
 
-                # Run evaluation
-                result = evaluate_stark_retrieval.invoke(
-                    {
-                        "query_file": query_path,
-                        "node_file": node_path,
-                        "batch_size": batch_size,
-                        "split": split,
-                    }
-                )
-
-                if result["status"] == "success":
-                    st.success("✅ Evaluation completed successfully!")
-
-                    with st.expander("Evaluation Metrics", expanded=True):
-                        # Display metrics
-                        render_metrics_visualization(result["metrics"])
-
-                    with st.expander("Knowledge Graph", expanded=True):
-                        # Get graph data from shared state
-                        graph_data = shared_state.get(config.StateKeys.KNOWLEDGE_GRAPH)
-                        if graph_data:
-                            nodes_df = pd.DataFrame(graph_data["nodes"])
-                            render_knowledge_graph(nodes_df, graph_data["similarities"])
-                        else:
-                            st.warning("No knowledge graph data available")
-
-                else:
-                    st.error(
-                        f"Evaluation failed: {result.get('message', 'Unknown error')}"
-                    )
-
-            except Exception as e:
-                st.error(f"Error during evaluation: {str(e)}")
+        if st.button("Clear Log"):
+            st.session_state.debug_messages = []
+            debug_placeholder.text_area(
+                "Process Log", value="", height=300, disabled=True
+            )
 
 
 def main():
@@ -232,6 +206,7 @@ def main():
 
     # Create status container
     status_container = st.container()
+    debug_container = st.container()
     progress_bar = status_container.progress(0)
     status_text = status_container.empty()
     metrics_container = st.container()
@@ -240,17 +215,18 @@ def main():
     with st.sidebar:
         st.header("Configuration")
         batch_size = st.slider("Batch Size", 32, 512, 256, 32)
+        chunk_size = st.slider("Processing Chunk Size", 500, 5000, 1000, 500)
         split = st.selectbox(
             "Evaluation Split", options=["test-0.1", "test", "validation"]
         )
 
-        # Add memory info
         st.info(
             """
-        File Size Limits:
-        - Query Embeddings: ~12MB
-        - Node Embeddings: ~200MB
-        Processing larger files may take several minutes.
+        Memory Tips:
+        - Smaller chunk sizes use less memory but take longer
+        - If you get memory errors, reduce chunk size
+        - Processing on CPU is slower but more stable
+        - For large files, start with small chunk sizes
         """
         )
 
@@ -396,12 +372,7 @@ def main():
 
         with st.chat_message("assistant"):
             try:
-                response = main_agent.invoke(
-                    {"messages": [{"role": "user", "content": prompt}]}
-                )
-                content = response.get(
-                    "response", "How can I help you with the evaluation?"
-                )
+                content = process_chat_query(prompt)  # <-- Use the new function here
                 st.markdown(content)
                 st.session_state.messages.append(
                     {"role": "assistant", "content": content}

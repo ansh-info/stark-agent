@@ -3,14 +3,13 @@ import re
 import traceback
 from typing import Any, Dict, List, Type, TypedDict
 
+from config.config import config
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolExecutor, create_react_agent
-
-from config.config import config
 from state.shared_state import shared_state
 from tools.stark import stark_tools  # Import the tools list
 from tools.stark.evaluation_retrival import evaluate_stark_retrieval

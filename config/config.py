@@ -1,3 +1,6 @@
+from typing import Any, Dict
+
+
 class Config:
     # LLM Configuration
     LLM_MODEL = "gpt-4o-mini"
@@ -5,60 +8,43 @@ class Config:
 
     # State Keys
     class StateKeys:
-        # STaRK-specific keys
-        EMBEDDINGS = "embeddings"  # Store embeddings data
-        QUERY_EMBEDDINGS = "query_embeddings"  # Query embeddings
-        NODE_EMBEDDINGS = "node_embeddings"  # Node embeddings
-        EVALUATION_RESULTS = "evaluation_results"  # Benchmark results
-        METRICS = "metrics"  # Evaluation metrics
-        KNOWLEDGE_GRAPH = "knowledge_graph"  # Graph structure
-        BATCH_CONFIG = "batch_config"  # Batch processing settings
-        EVALUATION_CONFIG = "evaluation_config"  # Evaluation parameters
+        # Existing keys
+        CURRENT_TOOL = "current_tool"
+        CURRENT_AGENT = "current_agent"
+        RESPONSE = "response"
+        ERROR = "error"
+        CHAT_HISTORY = "chat_history"
+        USER_INFO = "user_info"
+        MEMORY = "memory"
+
+        # StarkQA specific keys
+        EMBEDDINGS = "embeddings"
+        QUERY_EMBEDDINGS = "query_embeddings"
+        NODE_EMBEDDINGS = "node_embeddings"
+        EVALUATION_RESULTS = "evaluation_results"
+        METRICS = "metrics"
+        KNOWLEDGE_GRAPH = "knowledge_graph"
+        BATCH_CONFIG = "batch_config"
+        EVALUATION_CONFIG = "evaluation_config"
 
     # Agent Names
     class AgentNames:
         MAIN = "main_agent"
-        STARK = "stark_evaluation_agent"  # New STaRK agent
-        STARK_VIZ = "stark_visualization_agent"  # Visualization agent
-        STARK_DATA = "stark_data_processing_agent"  # Data processing agent
+        STARK = "stark_evaluation_agent"
+        STARK_VIZ = "stark_visualization_agent"
+        STARK_DATA = "stark_data_processing_agent"
 
     # Tool Names
     class ToolNames:
-        # STaRK Tools
+        # StarkQA Tools
         STARK_EVALUATE = "evaluate_stark_retrieval"
         STARK_ANALYZE_GRAPH = "analyze_knowledge_graph"
         STARK_COMPUTE_METRICS = "compute_vector_metrics"
         STARK_VISUALIZE = "visualize_results"
         STARK_PROCESS_DATA = "process_embeddings"
 
-    # STaRK-specific configurations
-    STARK_CONFIG = {
-        "batch_size": 256,
-        "top_k": 100,
-        "metrics": [
-            "mrr",
-            "map",
-            "rprecision",
-            "recall@5",
-            "recall@10",
-            "recall@20",
-            "recall@50",
-            "recall@100",
-            "hit@1",
-            "hit@3",
-            "hit@5",
-            "hit@10",
-            "hit@20",
-            "hit@50",
-        ],
-        "splits": ["test-0.1", "test", "validation"],
-    }
-
-
-config = Config()
-
-
-MAIN_AGENT_PROMPT = """You are a supervisory AI agent for evaluating and benchmarking LLM retrieval systems using the STaRK benchmark.
+    # Main Agent Prompt
+    MAIN_AGENT_PROMPT = """You are a supervisory AI agent for evaluating and benchmarking LLM retrieval systems using the STaRK benchmark.
 Your task is to select the most appropriate tool based on the user's request.
 
 Available tools and their capabilities:
@@ -116,24 +102,86 @@ Remember:
 - Consider visualization needs for results
 - Break complex tasks into manageable steps"""
 
-STARK_AGENT_PROMPT = """You are a specialized evaluation agent for the STaRK benchmark, focused on assessing LLM retrieval performance.
-When users ask questions, provide detailed insights about:
+    # StarkQA Agent Prompt
+    STARK_AGENT_PROMPT = """You are a specialized evaluation agent for the STaRK benchmark, focused on assessing LLM retrieval performance.
+You have access to these tools:
 
-1. Metrics explanation:
-- MRR (Mean Reciprocal Rank): Measures where the first correct answer appears in ranking
-- MAP (Mean Average Precision): Overall precision across all relevant items
-- R-Precision: Precision at the position equal to number of relevant items
-- Recall@K: Proportion of relevant items found in top K results
-- Hit@K: Whether any relevant item appears in top K results
+1. evaluate_stark_retrieval:
+   USE FOR: Core benchmark evaluation
+   - Process query and node embeddings
+   - Calculate similarity scores
+   - Compute standard metrics (MRR, MAP, NDCG)
+   - Generate performance reports
 
-2. Current Results Analysis:
-- MRR of 0.035 indicates first correct answers appear around position 1/0.035 ≈ 29
-- Recall improves from 0.043 (top-5) to 0.081 (top-100)
-- Hit rates show improvement from 0.024 (top-1) to 0.074 (top-50)
+2. analyze_knowledge_graph:
+   USE FOR: Graph structure analysis
+   - Examine node relationships
+   - Calculate graph metrics
+   - Identify important patterns
+   - Assess connectivity
 
-3. Insights:
-- Performance improves with larger K values
-- Model shows better recall at higher K
-- Hit rates indicate good presence of relevant items in larger result sets
+3. compute_vector_metrics:
+   USE FOR: Vector space analysis
+   - Calculate embedding similarities
+   - Analyze vector distributions
+   - Measure semantic relationships
+   - Evaluate vector quality
 
-Provide specific, numerical responses about these metrics and their implications."""
+GUIDELINES:
+
+For benchmark evaluation:
+- Verify input data formats
+- Apply appropriate metrics
+- Consider all evaluation aspects
+- Generate comprehensive reports
+
+For knowledge graph analysis:
+- Focus on relevant subgraphs
+- Identify key relationships
+- Analyze node importance
+- Consider graph properties
+
+For vector analysis:
+- Check embedding quality
+- Consider similarity measures
+- Evaluate vector spaces
+- Assess semantic relevance
+
+Best practices:
+1. Validate input data quality
+2. Use appropriate evaluation metrics
+3. Consider multiple performance aspects
+4. Generate clear insights
+5. Enable result visualization
+
+Remember:
+- Focus on benchmark objectives
+- Ensure metric accuracy
+- Consider practical implications
+- Provide actionable insights"""
+
+    # STaRK-specific configurations
+    STARK_CONFIG = {
+        "batch_size": 256,
+        "top_k": 100,
+        "metrics": [
+            "mrr",
+            "map",
+            "rprecision",
+            "recall@5",
+            "recall@10",
+            "recall@20",
+            "recall@50",
+            "recall@100",
+            "hit@1",
+            "hit@3",
+            "hit@5",
+            "hit@10",
+            "hit@20",
+            "hit@50",
+        ],
+        "splits": ["test-0.1", "test", "validation"],
+    }
+
+
+config = Config()
