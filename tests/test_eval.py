@@ -55,12 +55,14 @@ class TestEvaluation(unittest.TestCase):
 
     def test_local_evaluation(self):
         """Test local evaluation"""
-        result = evaluate_stark_retrieval(
-            query_file_content=self.query_content,
-            node_file_content=self.node_content,
-            batch_size=2,
-            split="test",
-            remote_processing=False,
+        result = evaluate_stark_retrieval.invoke(
+            {
+                "query_file_content": self.query_content,
+                "node_file_content": self.node_content,
+                "batch_size": 2,
+                "split": "test",
+                "remote_processing": False,
+            }
         )
 
         # Verify result structure
@@ -78,13 +80,15 @@ class TestEvaluation(unittest.TestCase):
 
     def test_remote_evaluation(self):
         """Test remote evaluation"""
-        result = evaluate_stark_retrieval(
-            query_file_content=self.query_content,
-            node_file_content=self.node_content,
-            batch_size=2,
-            split="test",
-            model="gpt-4o-mini",
-            remote_processing=True,
+        result = evaluate_stark_retrieval.invoke(
+            {
+                "query_file_content": self.query_content,
+                "node_file_content": self.node_content,
+                "batch_size": 2,
+                "split": "test",
+                "model": "gpt-4o-mini",
+                "remote_processing": True,
+            }
         )
 
         self.assertEqual(result["status"], "success")
@@ -93,34 +97,73 @@ class TestEvaluation(unittest.TestCase):
     def test_invalid_input(self):
         """Test handling of invalid input"""
         with self.assertRaises(Exception):
-            evaluate_stark_retrieval(
-                query_file_content="invalid", node_file_content="invalid", batch_size=2
+            evaluate_stark_retrieval.invoke(
+                {
+                    "query_file_content": "invalid",
+                    "node_file_content": "invalid",
+                    "batch_size": 2,
+                    "split": "test",
+                }
             )
 
     def test_batch_processing(self):
         """Test different batch sizes"""
         batch_sizes = [1, 2, 5]
         for batch_size in batch_sizes:
-            result = evaluate_stark_retrieval(
-                query_file_content=self.query_content,
-                node_file_content=self.node_content,
-                batch_size=batch_size,
-                split="test",
+            result = evaluate_stark_retrieval.invoke(
+                {
+                    "query_file_content": self.query_content,
+                    "node_file_content": self.node_content,
+                    "batch_size": batch_size,
+                    "split": "test",
+                }
             )
             self.assertEqual(result["status"], "success")
 
     def test_progress_tracking(self):
         """Test progress tracking functionality"""
-        result = evaluate_stark_retrieval(
-            query_file_content=self.query_content,
-            node_file_content=self.node_content,
-            batch_size=2,
-            split="test",
+        result = evaluate_stark_retrieval.invoke(
+            {
+                "query_file_content": self.query_content,
+                "node_file_content": self.node_content,
+                "batch_size": 2,
+                "split": "test",
+            }
         )
 
         # Verify result contains progress information
         self.assertEqual(result["status"], "success")
         self.assertGreater(len(result["detailed_results"]), 0)
+
+    def test_metric_ranges(self):
+        """Test if metrics are within valid ranges"""
+        result = evaluate_stark_retrieval.invoke(
+            {
+                "query_file_content": self.query_content,
+                "node_file_content": self.node_content,
+                "batch_size": 2,
+                "split": "test",
+            }
+        )
+
+        metrics = result["metrics"]
+        for metric_name, value in metrics.items():
+            self.assertGreaterEqual(value, 0.0, f"{metric_name} should be >= 0")
+            self.assertLessEqual(value, 1.0, f"{metric_name} should be <= 1")
+
+    def test_batch_size_validation(self):
+        """Test batch size validation"""
+        invalid_batch_sizes = [-1, 0, 1001]
+        for batch_size in invalid_batch_sizes:
+            with self.assertRaises(Exception):
+                evaluate_stark_retrieval.invoke(
+                    {
+                        "query_file_content": self.query_content,
+                        "node_file_content": self.node_content,
+                        "batch_size": batch_size,
+                        "split": "test",
+                    }
+                )
 
 
 if __name__ == "__main__":
