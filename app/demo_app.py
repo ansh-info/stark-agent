@@ -430,9 +430,8 @@ def render_demo_page():
             size=10,
             colorbar=dict(
                 thickness=15,
-                title="Node Connections",
+                title=dict(text="Node Connections", side="right"),  # ✅ CORRECTED ✅
                 xanchor="left",
-                titleside="right",
             ),
         ),
     )

@@ -30,7 +30,7 @@ class MainAgent:
             self.agent = create_react_agent(
                 model=llm_manager.llm,
                 tools=self.routing_tools,
-                messages_modifier=config.MAIN_AGENT_PROMPT,
+                prompt=config.MAIN_AGENT_PROMPT,
             )
 
         except Exception as e:

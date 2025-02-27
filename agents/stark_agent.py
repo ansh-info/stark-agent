@@ -9,7 +9,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, StateGraph
-from langgraph.prebuilt import ToolExecutor, create_react_agent
+from langgraph.prebuilt import create_react_agent
 from state.shared_state import shared_state
 from tools.stark import stark_tools  # Import the tools list
 from tools.stark.evaluation_retrival import evaluate_stark_retrieval
@@ -25,7 +25,7 @@ class StarkAgent:
             self.agent = create_react_agent(
                 model=llm_manager.llm,
                 tools=stark_tools,  # List of available tools
-                messages_modifier=config.STARK_AGENT_PROMPT,
+                prompt=config.STARK_AGENT_PROMPT,
             )
 
             print("StarkQA Agent initialized successfully")
