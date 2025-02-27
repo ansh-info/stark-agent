@@ -514,7 +514,6 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - OpenAI for GPT-4-mini access
 - This project was developed for Team VPE during the Biodatathon - [VirtualPatientEngine/AIAgents4Pharma](https://github.com/VirtualPatientEngine/AIAgents4Pharma)
 
-````markdown
 ## 📚 Citation
 
 If you use the STaRK Benchmark Suite in your research or project, please cite:
@@ -529,8 +528,3 @@ If you use the STaRK Benchmark Suite in your research or project, please cite:
   note = {STaRK Agent: A hierarchical agent system for evaluating LLM retrieval performance}
 }
 ```
-````
-
-## 📞 Contact
-
-For questions or feedback, please open an issue or contact us at [ansh-info@example.com]
